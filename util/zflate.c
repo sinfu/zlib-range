@@ -60,7 +60,7 @@ int main(int argc, char *argv[])
     switch (mode)
     {
         case MODE_UNSPECIFIED:
-            fputs("Operation mode is not specified.\n", stderr);
+            (void) fputs("Operation mode is not specified.\n", stderr);
             show_usage(stderr);
             exit(EX_USAGE);
 
@@ -112,7 +112,7 @@ static void deflate_stream(FILE *source, FILE *sink)
 
     if (isatty(fileno(sink)))
     {
-        fputs("Attempted to write deflated data to the terminal!\n", stderr);
+        (void) fputs("Attempted to write deflated data to the terminal!\n", stderr);
         exit(EX_USAGE);
     }
 
@@ -126,7 +126,7 @@ static void deflate_stream(FILE *source, FILE *sink)
     zstat = deflateInit(&stream, Z_DEFAULT_COMPRESSION);
     if (zstat < 0)
     {
-        fprintf(stderr, "Failed to start compression: %s\n", stream.msg);
+        (void) fprintf(stderr, "Failed to start compression: %s\n", stream.msg);
         goto L_zlib_error;
     }
 
@@ -138,9 +138,9 @@ static void deflate_stream(FILE *source, FILE *sink)
     stream.avail_out = sizeof(dstbuf);
     zmode            = Z_NO_FLUSH;
 
-    while (!feof(source) && !atend)
+    while (!atend)
     {
-        if (stream.avail_in == 0)
+        if (!feof(source) && stream.avail_in == 0)
         {
             /* We have used the entire buffer.  Read in next chunk. */
             const size_t nread = fread(srcbuf, 1, sizeof(srcbuf), source);
@@ -169,7 +169,7 @@ static void deflate_stream(FILE *source, FILE *sink)
                 break;
 
             default:
-                fprintf(stderr, "Failed to compress data: %s\n", stream.msg);
+                (void) fprintf(stderr, "Failed to compress data: %s\n", stream.msg);
                 goto L_zlib_error;
         }
 
@@ -202,9 +202,9 @@ static void deflate_stream(FILE *source, FILE *sink)
             break;
 
         case Z_DATA_ERROR:
-            fputs("Warning: The output should be incomplete!\n", stderr);
+            (void) fputs("Warning: The output should be incomplete!\n", stderr);
         default:
-            fprintf(stderr, "Failed to finish compression: %s\n", stream.msg);
+            (void) fprintf(stderr, "Failed to finish compression: %s\n", stream.msg);
             exit(EX_SOFTWARE);
     }
     return; /* success */
@@ -226,12 +226,13 @@ static void inflate_stream(FILE *source, FILE *sink)
     Bytef    srcbuf[BUFFER_SIZE];   /* where to store compressed input data */
     Bytef    dstbuf[BUFFER_SIZE];   /* where to store decompressed data */
     z_stream stream;
-    int      atend = 0;     /* set to nonzero when the compression stream is finished */
-    int      zstat = 0;     /* status code returned by zlib functions */
+    int      atend   = 0;           /* set to nonzero when the compression stream is finished */
+    int      zstat   = 0;           /* status code returned by zlib functions */
+    unsigned nbuferr = 0;           /* number of occurrence of Z_BUF_ERROR */
 
     if (isatty(fileno(source)))
     {
-        fputs("Attempted to input deflated data from the terminal!?\n", stderr);
+        (void) fputs("Attempted to input deflated data from the terminal!?\n", stderr);
         exit(EX_USAGE);
     }
 
@@ -245,7 +246,7 @@ static void inflate_stream(FILE *source, FILE *sink)
     zstat = inflateInit(&stream);
     if (zstat < 0)
     {
-        fprintf(stderr, "Failed to start decompression: %s\n", stream.msg);
+        (void) fprintf(stderr, "Failed to start decompression: %s\n", stream.msg);
         goto L_zlib_error;
     }
 
@@ -256,9 +257,9 @@ static void inflate_stream(FILE *source, FILE *sink)
     stream.next_out = dstbuf;
     stream.avail_out = sizeof(dstbuf);
 
-    while (!feof(source) && !atend)
+    while (!atend)
     {
-        if (stream.avail_in == 0)
+        if (!feof(source) && stream.avail_in == 0)
         {
             /* We have used the entire buffer.  Read in next chunk. */
             const size_t nread = fread(srcbuf, 1, sizeof(srcbuf), source);
@@ -278,12 +279,25 @@ static void inflate_stream(FILE *source, FILE *sink)
             case Z_OK:
                 break;
 
+            case Z_BUF_ERROR:
+                if (++nbuferr > 8)
+                {
+                    /* zlib infinitely produces Z_BUF_ERROR for some kind of corrupted input */
+                    (void) fputs("Too many buffer error. The input data may be corrupted?\n", stderr);
+                    goto L_zlib_error;
+                }
+                break;
+
             case Z_STREAM_END:
                 atend = 1;
                 break;
 
+            case Z_DATA_ERROR:
+                (void) fprintf(stderr, "Corrupted input data: %s\n", stream.msg);
+                goto L_zlib_error;
+
             default:
-                fprintf(stderr, "Failed to decompress data: %s\n", stream.msg);
+                (void) fprintf(stderr, "Failed to decompress data (%d): %s\n", zstat, stream.msg);
                 goto L_zlib_error;
         }
 
@@ -316,9 +330,10 @@ static void inflate_stream(FILE *source, FILE *sink)
             break;
 
         default:
-            fprintf(stderr, "Failed to finish compression: %s\n", stream.msg);
+            (void) fprintf(stderr, "Failed to finish compression: %s\n", stream.msg);
             exit(EX_SOFTWARE);
     }
+
     return; /* success */
 
 L_io_error:
@@ -327,7 +342,6 @@ L_io_error:
 
 L_zlib_error:
     (void) inflateEnd(&stream);
-    exit(EXIT_FAILURE);
+    exit(EX_SOFTWARE);
 }
-
 
